@@ -1,52 +1,78 @@
-// Feather Hub HWID Verification – Public endpoint
-// GET ?hwid=XXX
-
+// Feather Hub Admin – Simple HWID management
 const { getStore } = require("@netlify/blobs");
 
 exports.handler = async (event) => {
+  // CORS headers
   const headers = {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     "Content-Type": "application/json",
   };
 
+  // Handle preflight
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers, body: "" };
   }
 
-  if (event.httpMethod !== "GET") {
+  // Get secret from query string (GET) or body (POST)
+  let secret = event.queryStringParameters?.secret;
+  if (event.httpMethod === "POST" && event.body) {
+    try {
+      const body = JSON.parse(event.body);
+      secret = body.secret;
+    } catch (e) {}
+  }
+
+  const ADMIN_SECRET = process.env.ADMIN_SECRET;
+  
+  // Debug: log if secret is configured (won't show in browser)
+  console.log("ADMIN_SECRET exists?", !!ADMIN_SECRET);
+  console.log("Received secret:", secret);
+
+  if (!ADMIN_SECRET || secret !== ADMIN_SECRET) {
     return {
-      statusCode: 405,
+      statusCode: 401,
       headers,
-      body: JSON.stringify({ valid: false, message: "Method not allowed" }),
+      body: JSON.stringify({ error: "Unauthorized - Invalid or missing secret" }),
     };
   }
 
+  const action = event.queryStringParameters?.action;
   const hwid = event.queryStringParameters?.hwid;
-  if (!hwid) {
-    return {
-      statusCode: 400,
-      headers,
-      body: JSON.stringify({ valid: false, message: "Missing hwid parameter" }),
-    };
-  }
 
   try {
     const store = getStore("hwid-whitelist");
-    const whitelist = (await store.get("list", { type: "json" })) || [];
-    const isValid = whitelist.includes(hwid);
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({ valid: isValid }),
-    };
-  } catch (error) {
-    console.error("Error checking HWID:", error);
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({ valid: false, message: "Internal server error" }),
-    };
-  }
-};
+    let whitelist = (await store.get("list", { type: "json" })) || [];
+
+    switch (action) {
+      case "list":
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ whitelist }),
+        };
+
+      case "add":
+        if (!hwid) {
+          return {
+            statusCode: 400,
+            headers,
+            body: JSON.stringify({ error: "Missing hwid parameter" }),
+          };
+        }
+        if (!whitelist.includes(hwid)) {
+          whitelist.push(hwid);
+          await store.set("list", JSON.stringify(whitelist));
+        }
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ success: true, message: "HWID added" }),
+        };
+
+      case "remove":
+        if (!hwid) {
+          return {
+            statusCode: 400,
+         
