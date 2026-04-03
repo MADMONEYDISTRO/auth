@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Feather Hub – HWID Admin Panel</title>
+    <style>
+        body { font-family: system-ui, sans-serif; background: #0a0a0f; color: #eee; margin: 0; padding: 20px; }
+        .container { max-width: 700px; margin: 0 auto; background: #15151c; border-radius: 16px; padding: 24px; }
+        h1 { font-size: 24px; margin-top: 0; display: flex; align-items: center; gap: 10px; }
+        h1:before { content: "🔐"; font-size: 28px; }
+        .secret-box { background: #1e1e2a; padding: 16px; border-radius: 12px; margin-bottom: 24px; }
+        label { font-size: 12px; color: #aaa; display: block; margin-bottom: 6px; }
+        input, button { padding: 10px 14px; border-radius: 8px; border: none; font-size: 14px; }
+        input { background: #0a0a10; color: white; width: 200px; }
+        button { background: #3b3b6b; color: white; cursor: pointer; transition: 0.2s; }
+        button:hover { background: #5a5a9a; }
+        .danger-btn { background: #6b3b3b; }
+        .danger-btn:hover { background: #9a5a5a; }
+        .list-item { background: #1a1a24; padding: 12px; border-radius: 10px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .hwid-code { font-family: monospace; font-size: 13px; background: #00000040; padding: 4px 8px; border-radius: 6px; }
+        hr { margin: 20px 0; border-color: #2a2a35; }
+        .status { margin-top: 16px; font-size: 13px; color: #8b8b9e; }
+        .success { color: #6fcf97; }
+        .error { color: #e06c75; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Feather Hub – HWID Manager</h1>
+    <div class="secret-box">
+        <label>🔑 Admin Secret (required)</label>
+        <input type="password" id="adminSecret" placeholder="Your ADMIN_SECRET" autocomplete="off">
+        <button id="saveSecretBtn" style="margin-left: 8px;">Save</button>
+        <div class="status" id="secretStatus"></div>
+    </div>
+
+    <div id="adminPanel" style="display: none;">
+        <div style="display: flex; gap: 12px; margin-bottom: 24px;">
+            <input type="text" id="newHwid" placeholder="Enter HWID to whitelist" style="flex:1;">
+            <button id="addBtn">➕ ADD HWID</button>
+        </div>
+        <hr>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <strong>📋 Whitelisted HWIDs</strong>
+            <button id="refreshBtn">🔄 Refresh</button>
+        </div>
+        <div id="hwidList"></div>
+    </div>
+</div>
+
+<script>
+    let currentSecret = localStorage.getItem("adminSecret") || "";
+    const secretInput = document.getElementById("adminSecret");
+    const saveSecretBtn = document.getElementById("saveSecretBtn");
+    const secretStatus = document.getElementById("secretStatus");
+    const adminPanel = document.getElementById("adminPanel");
+
+    secretInput.value = currentSecret;
+    if (currentSecret) checkAndLoad();
+
+    saveSecretBtn.onclick = () => {
+        const newSecret = secretInput.value.trim();
+        if (!newSecret) {
+            secretStatus.innerText = "❌ Secret cannot be empty";
+            return;
+        }
+        localStorage.setItem("adminSecret", newSecret);
+        currentSecret = newSecret;
+        secretStatus.innerText = "✅ Secret saved!";
+        checkAndLoad();
+    };
+
+    async function apiRequest(action, hwid = "") {
+        let url = `/.netlify/functions/admin?secret=${encodeURIComponent(currentSecret)}&action=${action}`;
+        if (hwid) url += `&hwid=${encodeURIComponent(hwid)}`;
+        const res = await fetch(url);
+        return await res.json();
+    }
+
+    async function checkAndLoad() {
+        try {
+            const data = await apiRequest("list");
+            if (data.error) {
+                secretStatus.innerText = `❌ ${data.error}`;
+                adminPanel.style.display = "none";
+            } else {
+                secretStatus.innerText = "✅ Connected – you can manage HWIDs";
+                adminPanel.style.display = "block";
+                renderList(data.whitelist);
+            }
+        } catch(e) {
+            secretStatus.innerText = "⚠️ Cannot reach server. Check your secret or Netlify URL.";
+            adminPanel.style.display = "none";
+        }
+    }
+
+    async function renderList(whitelist) {
+        const container = document.getElementById("hwidList");
+        if (!whitelist || whitelist.length === 0) {
+            container.innerHTML = '<div style="color: #8b8b9e; text-align: center;">No HWIDs whitelisted yet.</div>';
+            return;
+        }
+        container.innerHTML = "";
+        for (const hwid of whitelist) {
+            const div = document.createElement("div");
+            div.className = "list-item";
+            div.innerHTML = `
+                <span class="hwid-code">${escapeHtml(hwid)}</span>
+                <button class="remove-btn danger-btn" data-hwid="${hwid}">🗑️ Remove</button>
+            `;
+            container.appendChild(div);
+        }
+        document.querySelectorAll(".remove-btn").forEach(btn => {
+            btn.onclick = async () => {
+                const hwidToRemove = btn.getAttribute("data-hwid");
+                const result = await apiRequest("remove", hwidToRemove);
+                if (result.success) {
+                    await checkAndLoad();
+                } else {
+                    alert("Remove failed: " + (result.error || "unknown"));
+                }
+            };
+        });
+    }
+
+    document.getElementById("addBtn").onclick = async () => {
+        const newHwid = document.getElementById("newHwid").value.trim();
+        if (!newHwid) return alert("Enter a HWID");
+        const result = await apiRequest("add", newHwid);
+        if (result.success) {
+            document.getElementById("newHwid").value = "";
+            await checkAndLoad();
+        } else {
+            alert("Add failed: " + (result.error || "unknown"));
+        }
+    };
+
+    document.getElementById("refreshBtn").onclick = () => checkAndLoad();
+
+    function escapeHtml(str) {
+        return str.replace(/[&<>]/g, function(m) {
+            if (m === '&') return '&amp;';
+            if (m === '<') return '&lt;';
+            if (m === '>') return '&gt;';
+            return m;
+        });
+    }
+</script>
+</body>
+</html>
